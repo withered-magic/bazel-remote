@@ -3,6 +3,7 @@ package grpcproxy
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -165,7 +166,7 @@ func (r *remoteGrpcProxyCache) UploadFile(item backendproxy.UploadReq) {
 		}
 		resourceName := fmt.Sprintf(template, uuid.New().String(), item.Hash, item.LogicalSize)
 
-		firstIteration := true
+		writeOffset := 0
 		for {
 			n, err := item.Rc.Read(buf)
 			if err != nil && err != io.EOF {
@@ -177,20 +178,17 @@ func (r *remoteGrpcProxyCache) UploadFile(item backendproxy.UploadReq) {
 				return
 			}
 			if n > 0 {
-				rn := ""
-				if firstIteration {
-					firstIteration = false
-					rn = resourceName
-				}
 				req := &bs.WriteRequest{
-					ResourceName: rn,
+					ResourceName: resourceName,
 					Data:         buf[:n],
+					WriteOffset:  int64(writeOffset),
 				}
 				err := stream.Send(req)
 				if err != nil {
 					logResponse(r.errorLogger, "Write", err.Error(), item.Kind, item.Hash)
 					return
 				}
+				writeOffset += n
 			} else {
 				_, err = stream.CloseAndRecv()
 				if err != nil {
@@ -266,7 +264,7 @@ func (r *remoteGrpcProxyCache) Get(ctx context.Context, kind cache.EntryKind, ha
 	case cache.AC:
 		digest := pb.Digest{
 			Hash:      hash,
-			SizeBytes: -1,
+			SizeBytes: sha256.Size * 2,
 		}
 
 		req := &pb.GetActionResultRequest{ActionDigest: &digest}

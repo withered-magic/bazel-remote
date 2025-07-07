@@ -222,6 +222,12 @@ func GetCliFlags() []cli.Flag {
 			Usage:   "Path to a certificate autority used to validate the grpc proxy backend certificate.",
 			EnvVars: []string{"BAZEL_REMOTE_GRPC_PROXY_CA_FILE"},
 		},
+		&cli.StringSliceFlag{
+			Name:    "grpc_proxy.header",
+			Value:   nil,
+			Usage:   "Headers that will be included in requests to the proxy backend",
+			EnvVars: []string{"BAZEL_REMOTE_GRPC_PROXY_HEADERS"},
+		},
 		&cli.StringFlag{
 			Name:    "http_proxy.url",
 			Value:   "",

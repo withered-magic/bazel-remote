@@ -36,6 +36,7 @@ type URLBackendConfig struct {
 	CertFile string   `yaml:"cert_file"`
 	KeyFile  string   `yaml:"key_file"`
 	CaFile   string   `yaml:"ca_file"`
+	Headers  []string `yaml:"headers"`
 }
 
 type LDAPConfig struct {
@@ -598,6 +599,7 @@ func get(ctx *cli.Context) (*Config, error) {
 			KeyFile:  ctx.String("grpc_proxy.key_file"),
 			CertFile: ctx.String("grpc_proxy.cert_file"),
 			CaFile:   ctx.String("grpc_proxy.ca_file"),
+			Headers:  ctx.StringSlice("grpc_proxy.header"),
 		}
 	}
 

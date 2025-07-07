@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/buchgr/bazel-remote/v2/cache/azblobproxy"
 	"github.com/buchgr/bazel-remote/v2/cache/gcsproxy"
@@ -23,6 +24,18 @@ import (
 	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	prom "github.com/prometheus/client_golang/prometheus"
 )
+
+type grpcHeadersCredentials struct {
+	headers map[string]string
+}
+
+func (c *grpcHeadersCredentials) GetRequestMetadata(ctx context.Context, uri ...string) (map[string]string, error) {
+	return c.headers, nil
+}
+
+func (c *grpcHeadersCredentials) RequireTransportSecurity() bool {
+	return false
+}
 
 func getTLSConfig(certFile, keyFile, caFile string) (*tls.Config, error) {
 	config := &tls.Config{}
@@ -84,6 +97,17 @@ func (c *Config) setProxy() error {
 				return streamer(metadata.AppendToOutgoingContext(ctx, "Authorization", header), desc, cc, method, opts...)
 			}
 			opts = append(opts, grpc.WithChainUnaryInterceptor(unaryAuth), grpc.WithStreamInterceptor(streamAuth))
+		}
+		if len(c.GRPCBackend.Headers) > 0 {
+			headers := make(map[string]string)
+			for _, entry := range c.GRPCBackend.Headers {
+				parts := strings.SplitN(entry, "=", 2)
+				if len(parts) != 2 {
+					return fmt.Errorf("invalid value for gRPC header: %q", entry)
+				}
+				headers[parts[0]] = parts[1]
+			}
+			opts = append(opts, grpc.WithPerRPCCredentials(&grpcHeadersCredentials{headers: headers}))
 		}
 
 		metrics := grpc_prometheus.NewClientMetrics(func(o *prom.CounterOpts) { o.Namespace = "proxy" })
