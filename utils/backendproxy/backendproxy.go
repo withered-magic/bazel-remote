@@ -1,12 +1,14 @@
 package backendproxy
 
 import (
+	"context"
 	"io"
 
 	"github.com/buchgr/bazel-remote/v2/cache"
 )
 
 type UploadReq struct {
+	Context     context.Context
 	Hash        string
 	LogicalSize int64
 	SizeOnDisk  int64

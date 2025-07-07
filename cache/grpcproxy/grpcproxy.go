@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
@@ -28,6 +29,8 @@ const (
 	// The maximum chunk size to write back to the client in Send calls.
 	// Inspired by Goma's FileBlob.FILE_CHUNK maxium size.
 	maxChunkSize = 2 * 1024 * 1024 // 2M
+
+	requestMetadataKey = "build.bazel.remote.execution.v2.requestmetadata-bin"
 )
 
 type GrpcClients struct {
@@ -45,6 +48,17 @@ func contains[A comparable](arr []A, value A) bool {
 		}
 	}
 	return false
+}
+
+func withForwardedRequestMetadata(ctx context.Context, reuseContext bool) context.Context {
+	vals := metadata.ValueFromIncomingContext(ctx, requestMetadataKey)
+	if !reuseContext {
+		ctx = context.Background()
+	}
+	if len(vals) > 0 {
+		return metadata.AppendToOutgoingContext(ctx, requestMetadataKey, vals[0])
+	}
+	return ctx
 }
 
 func NewGrpcClients(cc *grpc.ClientConn) *GrpcClients {
@@ -142,13 +156,13 @@ func (r *remoteGrpcProxyCache) UploadFile(item backendproxy.UploadReq) {
 			ActionDigest: digest,
 			ActionResult: ar,
 		}
-		_, err = r.clients.ac.UpdateActionResult(context.Background(), req)
+		_, err = r.clients.ac.UpdateActionResult(item.Context, req)
 		if err != nil {
 			logResponse(r.errorLogger, "Update", err.Error(), item.Kind, item.Hash)
 		}
 		return
 	case cache.CAS:
-		stream, err := r.clients.bs.Write(context.Background())
+		stream, err := r.clients.bs.Write(item.Context)
 		if err != nil {
 			logResponse(r.errorLogger, "Write", err.Error(), item.Kind, item.Hash)
 			return
@@ -177,19 +191,18 @@ func (r *remoteGrpcProxyCache) UploadFile(item backendproxy.UploadReq) {
 				}
 				return
 			}
-			if n > 0 {
-				req := &bs.WriteRequest{
-					ResourceName: resourceName,
-					Data:         buf[:n],
-					WriteOffset:  int64(writeOffset),
-				}
-				err := stream.Send(req)
-				if err != nil {
-					logResponse(r.errorLogger, "Write", err.Error(), item.Kind, item.Hash)
-					return
-				}
-				writeOffset += n
-			} else {
+			req := &bs.WriteRequest{
+				ResourceName: resourceName,
+				Data:         buf[:n],
+				WriteOffset:  int64(writeOffset),
+				FinishWrite:  err == io.EOF,
+			}
+			if err := stream.Send(req); err != nil {
+				logResponse(r.errorLogger, "Write", err.Error(), item.Kind, item.Hash)
+				return
+			}
+			writeOffset += n
+			if err == io.EOF {
 				_, err = stream.CloseAndRecv()
 				if err != nil {
 					logResponse(r.errorLogger, "Write", err.Error(), item.Kind, item.Hash)
@@ -212,6 +225,7 @@ func (r *remoteGrpcProxyCache) Put(ctx context.Context, kind cache.EntryKind, ha
 	}
 
 	item := backendproxy.UploadReq{
+		Context:     withForwardedRequestMetadata(ctx, false),
 		Hash:        hash,
 		LogicalSize: logicalSize,
 		SizeOnDisk:  sizeOnDisk,
@@ -256,6 +270,7 @@ func (r *remoteGrpcProxyCache) fetchBlobDigest(ctx context.Context, hash string)
 }
 
 func (r *remoteGrpcProxyCache) Get(ctx context.Context, kind cache.EntryKind, hash string, size int64) (io.ReadCloser, int64, error) {
+	ctx = withForwardedRequestMetadata(ctx, true)
 	switch kind {
 	case cache.RAW:
 		// RAW cache entries are a special case of AC, used when --disable_http_ac_validation
@@ -320,6 +335,7 @@ func (r *remoteGrpcProxyCache) Get(ctx context.Context, kind cache.EntryKind, ha
 }
 
 func (r *remoteGrpcProxyCache) Contains(ctx context.Context, kind cache.EntryKind, hash string, size int64) (bool, int64) {
+	ctx = withForwardedRequestMetadata(ctx, true)
 	switch kind {
 	case cache.RAW:
 		// RAW cache entries are a special case of AC, used when --disable_http_ac_validation
