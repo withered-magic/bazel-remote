@@ -30,7 +30,6 @@ const (
 	// Inspired by Goma's FileBlob.FILE_CHUNK maxium size.
 	maxChunkSize = 2 * 1024 * 1024 // 2M
 
-	requestMetadataKey = "build.bazel.remote.execution.v2.requestmetadata-bin"
 )
 
 type GrpcClients struct {
@@ -48,17 +47,6 @@ func contains[A comparable](arr []A, value A) bool {
 		}
 	}
 	return false
-}
-
-func withForwardedRequestMetadata(ctx context.Context, reuseContext bool) context.Context {
-	vals := metadata.ValueFromIncomingContext(ctx, requestMetadataKey)
-	if !reuseContext {
-		ctx = context.Background()
-	}
-	if len(vals) > 0 {
-		return metadata.AppendToOutgoingContext(ctx, requestMetadataKey, vals[0])
-	}
-	return ctx
 }
 
 func NewGrpcClients(cc *grpc.ClientConn) *GrpcClients {
@@ -224,8 +212,15 @@ func (r *remoteGrpcProxyCache) Put(ctx context.Context, kind cache.EntryKind, ha
 		return
 	}
 
+	// Construct a new context to avoid cancelling async uploads.
+	md, ok := metadata.FromIncomingContext(ctx)
+	ctx = context.Background()
+	if ok {
+		ctx = metadata.NewIncomingContext(ctx, md)
+	}
+
 	item := backendproxy.UploadReq{
-		Context:     withForwardedRequestMetadata(ctx, false),
+		Context:     ctx,
 		Hash:        hash,
 		LogicalSize: logicalSize,
 		SizeOnDisk:  sizeOnDisk,
@@ -270,7 +265,6 @@ func (r *remoteGrpcProxyCache) fetchBlobDigest(ctx context.Context, hash string)
 }
 
 func (r *remoteGrpcProxyCache) Get(ctx context.Context, kind cache.EntryKind, hash string, size int64) (io.ReadCloser, int64, error) {
-	ctx = withForwardedRequestMetadata(ctx, true)
 	switch kind {
 	case cache.RAW:
 		// RAW cache entries are a special case of AC, used when --disable_http_ac_validation
@@ -335,7 +329,6 @@ func (r *remoteGrpcProxyCache) Get(ctx context.Context, kind cache.EntryKind, ha
 }
 
 func (r *remoteGrpcProxyCache) Contains(ctx context.Context, kind cache.EntryKind, hash string, size int64) (bool, int64) {
-	ctx = withForwardedRequestMetadata(ctx, true)
 	switch kind {
 	case cache.RAW:
 		// RAW cache entries are a special case of AC, used when --disable_http_ac_validation

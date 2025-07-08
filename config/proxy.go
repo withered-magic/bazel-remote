@@ -25,16 +25,49 @@ import (
 	prom "github.com/prometheus/client_golang/prometheus"
 )
 
-type grpcHeadersCredentials struct {
+const (
+	requestMetadataKey = "build.bazel.remote.execution.v2.requestmetadata-bin"
+)
+
+type grpcHeadersForwarder struct {
+	// empty string means to forward the existing values if set
 	headers map[string]string
 }
 
-func (c *grpcHeadersCredentials) GetRequestMetadata(ctx context.Context, uri ...string) (map[string]string, error) {
-	return c.headers, nil
+func newGrpcHeadersForwarder(headersOpts []string) (*grpcHeadersForwarder, error) {
+	headers := map[string]string{requestMetadataKey: ""}
+	for _, opt := range headersOpts {
+		parts := strings.SplitN(opt, "=", 2)
+		key := strings.ToLower(parts[0])
+		value := ""
+		if len(parts) == 2 {
+			value = parts[1]
+		}
+		headers[key] = value
+	}
+	return &grpcHeadersForwarder{headers: headers}, nil
 }
 
-func (c *grpcHeadersCredentials) RequireTransportSecurity() bool {
-	return false
+func (f *grpcHeadersForwarder) forward(ctx context.Context) context.Context {
+	pairs := make([]string, 0, 2*len(f.headers))
+	for key, value := range f.headers {
+		if value == "" {
+			continue
+		}
+		pairs = append(pairs, key, value)
+	}
+	md, ok := metadata.FromIncomingContext(ctx)
+	if ok {
+		for key, value := range f.headers {
+			if value != "" {
+				continue
+			}
+			for _, value := range md.Get(key) {
+				pairs = append(pairs, key, value)
+			}
+		}
+	}
+	return metadata.AppendToOutgoingContext(ctx, pairs...)
 }
 
 func getTLSConfig(certFile, keyFile, caFile string) (*tls.Config, error) {
@@ -86,33 +119,28 @@ func (c *Config) setProxy() error {
 		} else {
 			opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 		}
+
+		forwarder, err := newGrpcHeadersForwarder(c.GRPCBackend.Headers)
+		if err != nil {
+			return err
+		}
 		if password, ok := c.GRPCBackend.BaseURL.User.Password(); ok {
 			username := c.GRPCBackend.BaseURL.User.Username()
 			auth := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s", username, password)))
 			header := fmt.Sprintf("Basic %s", auth)
-			unaryAuth := func(ctx context.Context, method string, req, res interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-				return invoker(metadata.AppendToOutgoingContext(ctx, "Authorization", header), method, req, res, cc, opts...)
-			}
-			streamAuth := func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
-				return streamer(metadata.AppendToOutgoingContext(ctx, "Authorization", header), desc, cc, method, opts...)
-			}
-			opts = append(opts, grpc.WithChainUnaryInterceptor(unaryAuth), grpc.WithStreamInterceptor(streamAuth))
+			forwarder.headers["authorization"] = header
 		}
-		if len(c.GRPCBackend.Headers) > 0 {
-			headers := make(map[string]string)
-			for _, entry := range c.GRPCBackend.Headers {
-				parts := strings.SplitN(entry, "=", 2)
-				if len(parts) != 2 {
-					return fmt.Errorf("invalid value for gRPC header: %q", entry)
-				}
-				headers[parts[0]] = parts[1]
-			}
-			opts = append(opts, grpc.WithPerRPCCredentials(&grpcHeadersCredentials{headers: headers}))
+		unaryAuth := func(ctx context.Context, method string, req, res interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+			return invoker(forwarder.forward(ctx), method, req, res, cc, opts...)
 		}
+		streamAuth := func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+			return streamer(forwarder.forward(ctx), desc, cc, method, opts...)
+		}
+		opts = append(opts, grpc.WithChainUnaryInterceptor(unaryAuth), grpc.WithStreamInterceptor(streamAuth))
 
 		metrics := grpc_prometheus.NewClientMetrics(func(o *prom.CounterOpts) { o.Namespace = "proxy" })
 		metrics.EnableClientHandlingTimeHistogram(func(o *prom.HistogramOpts) { o.Namespace = "proxy" })
-		err := prom.Register(metrics)
+		err = prom.Register(metrics)
 		if err != nil {
 			return err
 		}

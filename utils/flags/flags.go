@@ -225,7 +225,7 @@ func GetCliFlags() []cli.Flag {
 		&cli.StringSliceFlag{
 			Name:    "grpc_proxy.header",
 			Value:   nil,
-			Usage:   "Headers that will be included in requests to the proxy backend",
+			Usage:   "Headers that will be included in requests to the proxy backend.",
 			EnvVars: []string{"BAZEL_REMOTE_GRPC_PROXY_HEADERS"},
 		},
 		&cli.StringFlag{
