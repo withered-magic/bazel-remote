@@ -105,6 +105,10 @@ func badReqErr(format string, a ...interface{}) *cache.Error {
 	}
 }
 
+func logResponse(logger cache.Logger, method string, msg string, kind cache.EntryKind, hash string) {
+	logger.Printf("DISK CACHE %s %s %s: %s", strings.ToUpper(method), strings.ToUpper(kind.String()), hash, msg)
+}
+
 // Non-test users must call this to expose metrics.
 func (c *diskCache) RegisterMetrics() {
 	c.lru.RegisterMetrics()
@@ -739,12 +743,14 @@ func (c *diskCache) Contains(ctx context.Context, kind cache.EntryKind, hash str
 	c.mu.Unlock()
 
 	if exists && !isSizeMismatch(size, foundSize) {
+		logResponse(c.accessLogger, "CONTAINS", fmt.Sprintf("Success with size=%d", foundSize), kind, hash)
 		return true, foundSize
 	}
 
 	if c.proxy != nil && size <= c.maxProxyBlobSize {
 		exists, foundSize = c.proxy.Contains(ctx, kind, hash, size)
 		if exists && foundSize <= c.maxProxyBlobSize && !isSizeMismatch(size, foundSize) {
+			logResponse(c.accessLogger, "CONTAINS", fmt.Sprintf("Success with size=%d after proxy", foundSize), kind, hash)
 			return true, foundSize
 		}
 	}
