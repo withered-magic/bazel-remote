@@ -50,15 +50,15 @@ type LDAPConfig struct {
 }
 
 func (c *URLBackendConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
-	type Aux URLBackendConfig
-	aux := &struct {
-		URLStr string `yaml:"url"`
-		*Aux
-	}{
-		Aux: (*Aux)(c),
+	var aux struct {
+		URLStr   string   `yaml:"url"`
+		CertFile string   `yaml:"cert_file"`
+		KeyFile  string   `yaml:"key_file"`
+		CaFile   string   `yaml:"ca_file"`
+		Headers  []string `yaml:"headers"`
 	}
 
-	if err := unmarshal(aux); err != nil {
+	if err := unmarshal(&aux); err != nil {
 		return err
 	}
 	u, err := url.Parse(aux.URLStr)
@@ -66,6 +66,10 @@ func (c *URLBackendConfig) UnmarshalYAML(unmarshal func(interface{}) error) erro
 		return err
 	}
 	c.BaseURL = u
+	c.CertFile = aux.CertFile
+	c.KeyFile = aux.KeyFile
+	c.CaFile = aux.CaFile
+	c.Headers = aux.Headers
 	return nil
 }
 
